@@ -12,39 +12,35 @@ def convert_foundry_to_uvtt(source_data):
     # The SOW defers to checking the importer or common values. 1.0 seems current.
     target_uvtt['format'] = 1.0
 
-    # Resolution block
-    # map_origin is a common field in UVTT, defaulting to (0,0).
+    # Get actual image dimensions from background object, fall back to scene dimensions
+    img_w = source_data.get('background', {}).get('width', source_data.get('width', 0))
+    img_h = source_data.get('background', {}).get('height', source_data.get('height', 0))
+
+    # Resolution block should use the actual image dimensions
     target_uvtt['resolution'] = {
         'map_origin': {'x': 0, 'y': 0},
         'map_size': {
-            'x': source_data.get('width', 0),
-            'y': source_data.get('height', 0)
+            'x': img_w,
+            'y': img_h
         },
-        'pixels_per_grid': source_data.get('grid', {}).get('size', 70) # Default to 70 if not present
+        'pixels_per_grid': source_data.get('grid', {}).get('size', 70)
     }
 
     # Image path/identifier
     target_uvtt['image'] = source_data.get('background', {}).get('src', '')
 
-    # Calculate canvas offsets due to padding
+    # Calculate canvas offsets based on scene dimensions and padding
     padding = source_data.get('padding', 0.0)
-    img_w = target_uvtt['resolution']['map_size']['x']
-    img_h = target_uvtt['resolution']['map_size']['y']
+    scene_w = source_data.get('width', 0)
+    scene_h = source_data.get('height', 0)
 
     canvas_offset_x = 0.0
     canvas_offset_y = 0.0
 
-    if padding > 1e-6 and padding < 0.5: # padding is a float, check > 0 and < 0.5 to avoid division by zero or invalid logic
-        denominator = 1.0 - 2.0 * padding
-        if denominator > 1e-6: # Ensure denominator is positive and not extremely close to zero
-            canvas_w = img_w / denominator
-            canvas_h = img_h / denominator
-            canvas_offset_x = padding * canvas_w
-            canvas_offset_y = padding * canvas_h
-        else:
-            print(f"Warning: Padding value {padding} resulted in a non-positive or too small denominator. Treating as no padding.")
-    elif padding >= 0.5:
-        print(f"Warning: Padding value {padding} is 0.5 or greater, which is invalid. Treating as no padding.")
+    if padding > 1e-6:
+        # The offset is simply padding multiplied by the total scene (canvas) width/height.
+        canvas_offset_x = padding * scene_w
+        canvas_offset_y = padding * scene_h
 
     # Initialize line_of_sight (for walls) and portals (for doors)
     target_uvtt['line_of_sight'] = []
@@ -74,17 +70,11 @@ def convert_foundry_to_uvtt(source_data):
             x2_canvas = float(coords[2])
             y2_canvas = float(coords[3])
 
-            # Adjust coordinates to be relative to the image's top-left corner (accounts for padding)
-            x1_img_tl = x1_canvas - canvas_offset_x
-            y1_img_tl = y1_canvas - canvas_offset_y
-            x2_img_tl = x2_canvas - canvas_offset_x
-            y2_img_tl = y2_canvas - canvas_offset_y
-
-            # Further adjust to be center-relative for UVTT importer (assuming map_origin {0,0} implies center-relative points)
-            x1 = x1_img_tl - (img_w / 2.0)
-            y1 = y1_img_tl - (img_h / 2.0)
-            x2 = x2_img_tl - (img_w / 2.0)
-            y2 = y2_img_tl - (img_h / 2.0)
+            # Roll20 expects top-left origin, so just strip the canvas padding.
+            x1 = x1_canvas - canvas_offset_x
+            y1 = y1_canvas - canvas_offset_y
+            x2 = x2_canvas - canvas_offset_x
+            y2 = y2_canvas - canvas_offset_y
         except (ValueError, TypeError) as e:
             wall_id = wall_segment.get('_id', f'index {i}')
             print(f"Warning: Skipping wall segment '{wall_id}' due to non-numeric coordinates: {e}")
