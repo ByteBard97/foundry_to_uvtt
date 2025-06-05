@@ -16,19 +16,21 @@ def convert_foundry_to_uvtt(source_data):
     scene_h = source_data.get('height', 0)
     padding = source_data.get('padding', 0.0)
 
-    # Resolution block: Roll20 expects the full canvas size,
-    # because that's the size you set your page image to.
+    # Get pixels_per_grid early for use in resolution block.
+    pixels_per_grid = (
+        source_data['grid']['size']
+        if isinstance(source_data.get('grid'), dict)
+        else source_data.get('grid', 100)
+    )
+
+    # Resolution block: map_size is in grid squares for UVTT.
     target_uvtt['resolution'] = {
         'map_origin': {'x': 0, 'y': 0},
         'map_size': {
-            'x': scene_w,
-            'y': scene_h
+            'x': scene_w / pixels_per_grid,
+            'y': scene_h / pixels_per_grid
         },
-        'pixels_per_grid': (
-            source_data['grid']['size']
-            if isinstance(source_data.get('grid'), dict)
-            else source_data.get('grid', 100)
-        )
+        'pixels_per_grid': pixels_per_grid
     }
 
     # Image path/identifier
@@ -52,9 +54,9 @@ def convert_foundry_to_uvtt(source_data):
         canvas_offset_x = padding * scene_w
         canvas_offset_y = padding * scene_h
 
-    # Calculate grid origin offset to convert from corner-based (Foundry) to center-based (Roll20/UVTT)
-    pixels_per_grid = target_uvtt['resolution']['pixels_per_grid']
-    grid_offset = pixels_per_grid / 2.0
+    # Universal VTT uses the same corner-based origin as Foundry.
+    # No half-grid shift is required.
+    grid_offset = 0.0
 
     # Initialize line_of_sight (for walls) and portals (for doors)
     target_uvtt['line_of_sight'] = []
@@ -84,12 +86,13 @@ def convert_foundry_to_uvtt(source_data):
             x2_canvas = float(coords[2])
             y2_canvas = float(coords[3])
 
-            # Roll20 expects top-left origin. We subtract canvas padding, the background
-            # image's shift, and a half-grid offset for origin correction (corner vs. center).
-            x1 = x1_canvas - canvas_offset_x - background_shift_x - grid_offset
-            y1 = y1_canvas - canvas_offset_y - background_shift_y - grid_offset
-            x2 = x2_canvas - canvas_offset_x - background_shift_x - grid_offset
-            y2 = y2_canvas - canvas_offset_y - background_shift_y - grid_offset
+            # UVTT coordinates are in grid units, not pixels.
+            # We convert from canvas pixel coordinates to grid coordinates.
+            # Offsets for padding and background shift are subtracted before conversion.
+            x1 = (x1_canvas - canvas_offset_x - background_shift_x - grid_offset) / pixels_per_grid
+            y1 = (y1_canvas - canvas_offset_y - background_shift_y - grid_offset) / pixels_per_grid
+            x2 = (x2_canvas - canvas_offset_x - background_shift_x - grid_offset) / pixels_per_grid
+            y2 = (y2_canvas - canvas_offset_y - background_shift_y - grid_offset) / pixels_per_grid
         except (ValueError, TypeError) as e:
             wall_id = wall_segment.get('_id', f'index {i}')
             print(f"Warning: Skipping wall segment '{wall_id}' due to non-numeric coordinates: {e}")
@@ -134,15 +137,15 @@ def convert_foundry_to_uvtt(source_data):
     # 'objects_line_of_sight' are not requested for generation from Foundry data.
 
     # Collect debug info
-    pixels_per_grid = target_uvtt['resolution']['pixels_per_grid']
     debug_info = {
         'Scene Dimensions (Canvas)': f"{scene_w} x {scene_h} pixels",
+        'Scene Dimensions (Grid Squares)': f"{scene_w / pixels_per_grid:.2f} x {scene_h / pixels_per_grid:.2f}",
         'Padding Value': padding,
         'Grid Size (pixels_per_grid)': pixels_per_grid,
         'Padding Offset (x, y)': (canvas_offset_x, canvas_offset_y),
         'Background Shift (x, y)': (background_shift_x, background_shift_y),
         'Grid Origin Offset (x, y)': (grid_offset, grid_offset),
-        'Total Offset Subtracted (x, y)': (canvas_offset_x + background_shift_x + grid_offset, canvas_offset_y + background_shift_y + grid_offset),
+        'Total Offset Subtracted (x, y) IN PIXELS': (canvas_offset_x + background_shift_x + grid_offset, canvas_offset_y + background_shift_y + grid_offset),
         'Walls Found': len(target_uvtt['line_of_sight']),
         'Portals (Doors/Windows) Found': len(target_uvtt['portals'])
     }
