@@ -12,28 +12,38 @@ def convert_foundry_to_uvtt(source_data):
     # The SOW defers to checking the importer or common values. 1.0 seems current.
     target_uvtt['format'] = 1.0
 
-    # Get actual image dimensions from background object, fall back to scene dimensions
-    img_w = source_data.get('background', {}).get('width', source_data.get('width', 0))
-    img_h = source_data.get('background', {}).get('height', source_data.get('height', 0))
+    scene_w = source_data.get('width', 0)
+    scene_h = source_data.get('height', 0)
+    padding = source_data.get('padding', 0.0)
 
-    # Resolution block should use the actual image dimensions
+    # Resolution block: Roll20 expects the full canvas size,
+    # because that's the size you set your page image to.
     target_uvtt['resolution'] = {
         'map_origin': {'x': 0, 'y': 0},
         'map_size': {
-            'x': img_w,
-            'y': img_h
+            'x': scene_w,
+            'y': scene_h
         },
-        'pixels_per_grid': source_data.get('grid', {}).get('size', 70)
+        'pixels_per_grid': (
+            source_data['grid']['size']
+            if isinstance(source_data.get('grid'), dict)
+            else source_data.get('grid', 100)
+        )
     }
 
     # Image path/identifier
     target_uvtt['image'] = source_data.get('background', {}).get('src', '')
 
-    # Calculate canvas offsets based on scene dimensions and padding
-    padding = source_data.get('padding', 0.0)
-    scene_w = source_data.get('width', 0)
-    scene_h = source_data.get('height', 0)
+    # --- Account for background image's own offset within the scene ---
+    bg = source_data.get('background', {})
+    # Foundry may store the background's center coordinates in x/y.
+    bg_center_x = float(bg.get('x', scene_w / 2.0))
+    bg_center_y = float(bg.get('y', scene_h / 2.0))
+    # Convert Foundry's center-coords to a top-left offset. If x/y don't exist, this is 0.
+    background_shift_x = bg_center_x - (scene_w / 2.0)
+    background_shift_y = bg_center_y - (scene_h / 2.0)
 
+    # Calculate canvas padding offset based on scene dimensions
     canvas_offset_x = 0.0
     canvas_offset_y = 0.0
 
@@ -70,11 +80,12 @@ def convert_foundry_to_uvtt(source_data):
             x2_canvas = float(coords[2])
             y2_canvas = float(coords[3])
 
-            # Roll20 expects top-left origin, so just strip the canvas padding.
-            x1 = x1_canvas - canvas_offset_x
-            y1 = y1_canvas - canvas_offset_y
-            x2 = x2_canvas - canvas_offset_x
-            y2 = y2_canvas - canvas_offset_y
+            # Roll20 expects top-left origin. We subtract both the canvas padding
+            # and the background image's own shift within the canvas.
+            x1 = x1_canvas - canvas_offset_x - background_shift_x
+            y1 = y1_canvas - canvas_offset_y - background_shift_y
+            x2 = x2_canvas - canvas_offset_x - background_shift_x
+            y2 = y2_canvas - canvas_offset_y - background_shift_y
         except (ValueError, TypeError) as e:
             wall_id = wall_segment.get('_id', f'index {i}')
             print(f"Warning: Skipping wall segment '{wall_id}' due to non-numeric coordinates: {e}")
@@ -118,7 +129,20 @@ def convert_foundry_to_uvtt(source_data):
     # As per SOW, only specific fields are mapped. 'lights', 'environment', 
     # 'objects_line_of_sight' are not requested for generation from Foundry data.
 
-    return target_uvtt
+    # Collect debug info
+    pixels_per_grid = target_uvtt['resolution']['pixels_per_grid']
+    debug_info = {
+        'Scene Dimensions (Canvas)': f"{scene_w} x {scene_h} pixels",
+        'Padding Value': padding,
+        'Grid Size (pixels_per_grid)': pixels_per_grid,
+        'Padding Offset (x, y)': (canvas_offset_x, canvas_offset_y),
+        'Background Shift (x, y)': (background_shift_x, background_shift_y),
+        'Total Offset Subtracted (x, y)': (canvas_offset_x + background_shift_x, canvas_offset_y + background_shift_y),
+        'Walls Found': len(target_uvtt['line_of_sight']),
+        'Portals (Doors/Windows) Found': len(target_uvtt['portals'])
+    }
+
+    return target_uvtt, debug_info
 
 def main():
     parser = argparse.ArgumentParser(
@@ -195,7 +219,12 @@ def main():
         return
 
     # Perform the conversion
-    uvtt_data = convert_foundry_to_uvtt(source_json_data)
+    uvtt_data, debug_stats = convert_foundry_to_uvtt(source_json_data)
+
+    print("\n--- Extracted Debug Information ---")
+    for key, value in debug_stats.items():
+        print(f"{key:<35}: {value}")
+    print("-----------------------------------\n")
 
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
