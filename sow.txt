@@ -1,0 +1,196 @@
+Project Title:
+Python Script for Map Data Conversion: Foundry VTT-like JSON to Universal VTT (UVTT) Format
+
+Objective:
+To create a Python script that reads a map data file in a JSON format (similar to that used by Foundry VTT, as exemplified by the provided .db file content) and converts it into the Universal VTT (UVTT) JSON format. The UVTT output must be compatible with the Roll20 API script "UniversalVTTImporter.js" (found at https://raw.githubusercontent.com/shdwjk/Roll20API/master/UniversalVTTImporter/UniversalVTTImporter.js).
+
+The primary goal is to automate the conversion of map geometry, especially walls and doors, for use in Roll20.
+
+Input Data Format:
+The script will take as input a single JSON file (e.g., with a .db or .json extension). The key structures within this source JSON are:
+
+Top-level Object: Contains all map data.
+
+name: (String) Name of the map.
+
+width: (Integer) Overall map width in pixels.
+
+height: (Integer) Overall map height in pixels.
+
+grid: (Integer) Grid size in pixels per grid square.
+
+gridType: (Integer) Type of grid (e.g., 1 for square).
+
+img: (String) Path or identifier for the map background image.
+
+walls: (Array of Objects) This is the most critical part. Each object in the array represents a wall or door segment and has the following structure:
+
+_id: (String) Unique identifier for the wall segment.
+
+c: (Array of 4 Integers) Coordinates [x1, y1, x2, y2] defining the start (x1,y1) and end (x2,y2) points of the wall segment.
+
+door: (Integer) Flag indicating if the segment is a door.
+
+0: It's a standard wall.
+
+1: It's a door.
+
+ds: (Integer) Door state (e.g., 0 for closed, 1 for open). (Assume 0 or closed if not specified in target format).
+
+move: (Integer) Likely related to movement restriction (e.g., 1 for restricted).
+
+sense: (Integer) Likely related to vision/sense restriction.
+
+Example snippet of a walls array element from the source:
+
+{
+  "_id": "chsnz7UipI2Yh28P",
+  "c": [1443, 1732, 1321, 1907],
+  "move": 1,
+  "sense": 0,
+  "door": 0,
+  "ds": 0
+}
+```json
+{
+  "_id": "jLq8TQ3wxOLPK4jo",
+  "c": [4628, 2511, 4628, 2730],
+  "move": 1,
+  "sense": 1, /* or 0 */
+  "door": 1,
+  "ds": 0
+}
+
+Output Data Format (Target UVTT JSON):
+The script must generate a new JSON file adhering to the UVTT specification. Key structures in the target format:
+
+Top-level Object:
+
+format: (Float) Version of the UVTT format (e.g., 0.2 or as determined by the importer script).
+
+resolution: (Object)
+
+map_size: (Object) Contains x and y keys for map dimensions.
+
+x: (Integer) Map width (from source width).
+
+y: (Integer) Map height (from source height).
+
+pixels_per_grid: (Integer) Grid size (from source grid).
+
+image: (String) Path to the map image (from source img).
+
+line_of_sight: (Array of Arrays of Objects) Represents standard walls. Each inner array contains two point objects:
+
+[ { "x": x1, "y": y1 }, { "x": x2, "y": y2 } ]
+
+portals: (Array of Objects) Represents doors. Each portal object has:
+
+position: (Object) The center point of the door.
+
+x: (Float/Integer) Midpoint x-coordinate of the door segment.
+
+y: (Float/Integer) Midpoint y-coordinate of the door segment.
+
+bounds: (Array of Objects) The start and end points of the door segment, similar to line_of_sight format.
+
+[ { "x": x1, "y": y1 }, { "x": x2, "y": y2 } ]
+
+closed: (Boolean) true if the door is closed, false if open (can default to true or map from source ds).
+
+freestanding: (Boolean) (Likely false for these types of doors).
+
+Example snippet of target line_of_sight and portals:
+
+{
+    // ... other UVTT fields ...
+    "line_of_sight": [
+        [ {"x": 1443, "y": 1732}, {"x": 1321, "y": 1907} ]
+        // ... more walls ...
+    ],
+    "portals": [
+        {
+            "position": {"x": 4628, "y": 2620.5},
+            "bounds": [ {"x": 4628, "y": 2511}, {"x": 4628, "y": 2730} ],
+            "closed": true,
+            "freestanding": false
+        }
+        // ... more portals ...
+    ]
+}
+
+Core Transformation Logic:
+Read & Parse Source JSON: Load the input .db file and parse its JSON content.
+
+Initialize Target UVTT Structure: Create a new Python dictionary that will be converted to the output JSON.
+
+Map Basic Information:
+
+Set target_uvtt['resolution']['map_size']['x'] from source_json['width'].
+
+Set target_uvtt['resolution']['map_size']['y'] from source_json['height'].
+
+Set target_uvtt['resolution']['pixels_per_grid'] from source_json['grid'].
+
+Set target_uvtt['image'] from source_json['img'].
+
+Set target_uvtt['format'] to an appropriate UVTT version number (e.g., 0.2 or 0.4, check importer script).
+
+Process Walls and Doors:
+
+Initialize target_uvtt['line_of_sight'] = [] and target_uvtt['portals'] = [].
+
+Iterate through each wall_segment in the source_json['walls'] array:
+
+Extract coordinates: x1, y1, x2, y2 = wall_segment['c'].
+
+If wall_segment['door'] == 0 (it's a standard wall):
+
+Create the UVTT wall entry: uvtt_wall = [ {"x": x1, "y": y1}, {"x": x2, "y": y2} ].
+
+Append to target_uvtt['line_of_sight'].
+
+If wall_segment['door'] == 1 (it's a door):
+
+Calculate midpoint for portal position: mid_x = (x1 + x2) / 2, mid_y = (y1 + y2) / 2.
+
+Determine door state (e.g., is_closed = wall_segment['ds'] == 0).
+
+Create the UVTT portal entry:
+
+uvtt_portal = {
+    "position": {"x": mid_x, "y": mid_y},
+    "bounds": [ {"x": x1, "y": y1}, {"x": x2, "y": y2} ],
+    "closed": is_closed, # Or default to true
+    "freestanding": False # Default
+}
+
+Append to target_uvtt['portals'].
+
+Generate Output JSON: Convert the target_uvtt Python dictionary into a JSON string and write it to a new output file (e.g., map_converted.uvtt or map_converted.json).
+
+Script Requirements:
+Language: Python 3.
+
+Libraries: Primarily use the built-in json module. No external libraries should be strictly necessary unless for advanced file path handling (e.g., os or pathlib for user input of paths).
+
+Input: The script should accept the file path of the source JSON file as a command-line argument or prompt the user for it.
+
+Output: The script should generate a new JSON file in the UVTT format. The output filename could be derived from the input filename (e.g., input_file.uvtt) or specified by the user.
+
+Error Handling (Basic): Include basic error handling, such as checking if the input file exists and if it's valid JSON.
+
+User Feedback: Provide some feedback to the user (e.g., "Conversion started...", "Conversion complete. Output saved to [filename]").
+
+Key Challenges / Points of Attention:
+Ensuring the coordinate transformation from the c array in the source to the array of point objects in line_of_sight and portals.bounds is accurate.
+
+Correctly calculating the midpoint for portals.position.
+
+Precisely matching the nested structure and key names of the target UVTT format, especially within resolution, line_of_sight, and portals.
+
+Determining the correct value for format in the UVTT output (this might require inspecting the UniversalVTTImporter.js or its documentation). A common value is 0.2 or 0.4.
+
+Handling the ds (door state) from the source and mapping it to the closed (boolean) field in the target portals (e.g., source ds: 0 could mean closed: true). Default to closed: true if unsure.
+
+This detailed SOW should give Cursor a very clear understanding of the task.
